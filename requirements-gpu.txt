@@ -1,0 +1,12 @@
+-r requirements.txt
+torch
+torchvision
+transformers
+accelerate
+diffusers @ git+https://github.com/huggingface/diffusers.git
+safetensors
+opencv-python
+imageio
+ftfy
+sentencepiece
+rembg[cpu]
