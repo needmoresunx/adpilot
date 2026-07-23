@@ -1,5 +1,7 @@
 # AdPilot
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 AdPilot turns a clean product reference image into a short, audited product-ad video. It uses Qwen2.5-VL for product analysis and visual review, FLUX.1 Kontext for reference-conditioned keyframes, and Wan2.2 I2V for motion.
 
 ## Demos
@@ -75,3 +77,7 @@ bash scripts/run_cosmetic_tube.sh
 - `assets/demo/`: README demo media
 - `examples/`: product reference images
 - `tests/`: focused unit tests
+
+## License
+
+The source code is released under the [MIT License](LICENSE). Demo media and model weights remain subject to their respective terms.

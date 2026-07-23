@@ -57,4 +57,4 @@ download_if_incomplete "$VIDEO_REPO" "$MODEL_ROOT/wan2.2-i2v-a14b-diffusers" "$(
 download_if_incomplete "$VLM_REPO" "$MODEL_ROOT/qwen2.5-vl-3b-instruct" "$((2 * 1024 * 1024 * 1024))" "product-analysis VLM"
 
 echo
-echo "Done. In an active GPU allocation, run bash scripts/run_perfume.sh or bash scripts/run_jelly.sh."
+echo "Done. In an active GPU allocation, run bash scripts/run_wireless_earbuds.sh or bash scripts/run_cosmetic_tube.sh."

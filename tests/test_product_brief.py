@@ -26,7 +26,7 @@ class ProductBriefTests(unittest.TestCase):
 
     def test_user_description_is_not_replaced_by_vision_caption(self):
         brief = build_product_brief(
-            product_path=Path("examples/perfume.jpg"),
+            product_path=Path("examples/cosmetic-reference.jpg"),
             aspect_ratio=0.66,
             description="a pink perfume bottle with a silver bow",
             visual_caption="a bottle on a white background",
@@ -35,8 +35,8 @@ class ProductBriefTests(unittest.TestCase):
 
         self.assertEqual(brief.description, "a pink perfume bottle with a silver bow")
 
-    def test_jelly_filename_infers_snack_category(self):
-        brief = build_product_brief(product_path=Path("examples/jelly.jpg"), aspect_ratio=0.8)
+    def test_snack_filename_infers_snack_category(self):
+        brief = build_product_brief(product_path=Path("synthetic-snack.jpg"), aspect_ratio=0.8)
 
         self.assertEqual(brief.category, "snack")
         self.assertIn("snack", " ".join(brief.scene_keywords + [brief.description]).lower())
@@ -48,7 +48,7 @@ class ProductBriefTests(unittest.TestCase):
 
     def test_user_identity_anchors_are_retained_separately_from_vlm_traits(self):
         brief = build_product_brief(
-            product_path=Path("examples/perfume.jpg"),
+            product_path=Path("examples/cosmetic-reference.jpg"),
             aspect_ratio=0.97,
             identity_anchors="exposed silver atomizer, no colored cap",
             vision_analysis={"visible_traits": ["pink cap"]},
@@ -59,7 +59,7 @@ class ProductBriefTests(unittest.TestCase):
 
     def test_user_package_state_is_retained_separately_from_identity_traits(self):
         brief = build_product_brief(
-            product_path=Path("examples/jelly.jpg"),
+            product_path=Path("synthetic-snack.jpg"),
             aspect_ratio=0.74,
             package_state="open_with_contents",
         )

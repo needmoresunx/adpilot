@@ -151,7 +151,7 @@ class VlmCriticTests(unittest.TestCase):
                 return '{"identity_verdict":"pass","identity_score":90,"product_visible":true,"product_count":1,"label_readability":"readable","temporal_consistency":"stable","constraint_verdict":"fail"}'
 
         identity = SimpleNamespace(
-            product_path="examples/jelly.jpg",
+            product_path="synthetic-snack.jpg",
             aspect_ratio=0.74,
             product_brief={"category": "snack", "identity_anchors": "gold candy pouch"},
         )
