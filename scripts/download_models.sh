@@ -39,13 +39,9 @@ download_if_incomplete() {
   "$HF_CLI" download "$repo" --local-dir "$destination" --max-workers "$HF_MAX_WORKERS"
 }
 
-if ! python -c "import sentencepiece"; then
-  echo "Installing sentencepiece required by FLUX Kontext"
-  python -m pip install sentencepiece
-fi
-if ! python -c "import qwen_vl_utils"; then
-  echo "Installing qwen-vl-utils required by the product-analysis VLM"
-  python -m pip install qwen-vl-utils
+if ! python -c "import sentencepiece, qwen_vl_utils"; then
+  echo "Missing runtime dependencies. Run bash scripts/install_gpu_deps.sh first." >&2
+  exit 1
 fi
 
 echo "HF endpoint: $HF_ENDPOINT"

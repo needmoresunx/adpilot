@@ -6,9 +6,13 @@ AdPilot turns a clean product reference image into a short, audited product-ad v
 
 ### Wireless Earbuds
 
-| Reference image | Generated storyboard |
-| --- | --- |
-| ![Wireless earbuds reference](assets/demo/wireless-earbuds/reference.jpg) | ![Wireless earbuds storyboard](assets/demo/wireless-earbuds/storyboard.png) |
+<table>
+  <tr><th width="30%">Reference image</th><th width="70%">Generated storyboard</th></tr>
+  <tr>
+    <td><img src="assets/demo/wireless-earbuds/reference.jpg" alt="Wireless earbuds reference" width="220" /></td>
+    <td><img src="assets/demo/wireless-earbuds/storyboard.png" alt="Wireless earbuds storyboard" width="640" /></td>
+  </tr>
+</table>
 
 ![Wireless earbuds generated preview](assets/demo/wireless-earbuds/preview.gif)
 
@@ -16,9 +20,13 @@ AdPilot turns a clean product reference image into a short, audited product-ad v
 
 ### Cosmetic Tube
 
-| Reference image | Generated storyboard |
-| --- | --- |
-| ![Cosmetic tube reference](assets/demo/cosmetic-tube/reference.jpg) | ![Cosmetic tube storyboard](assets/demo/cosmetic-tube/storyboard.png) |
+<table>
+  <tr><th width="30%">Reference image</th><th width="70%">Generated storyboard</th></tr>
+  <tr>
+    <td><img src="assets/demo/cosmetic-tube/reference.jpg" alt="Cosmetic tube reference" width="220" /></td>
+    <td><img src="assets/demo/cosmetic-tube/storyboard.png" alt="Cosmetic tube storyboard" width="640" /></td>
+  </tr>
+</table>
 
 ![Cosmetic tube generated preview](assets/demo/cosmetic-tube/preview.gif)
 
@@ -36,7 +44,7 @@ AdPilot turns a clean product reference image into a short, audited product-ad v
 ## Setup
 
 ```bash
-conda env create -f environment.yml
+conda create -n adpilot python=3.11
 conda activate adpilot
 bash scripts/install_gpu_deps.sh
 ```
