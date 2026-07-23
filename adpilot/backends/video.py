@@ -5,8 +5,18 @@ from typing import Protocol
 
 from PIL import Image
 
-from adpilot.backends.background import cover_resize
-from adpilot.preview.video import export_motion_preview_if_available
+
+def cover_resize(image: Image.Image, size: tuple[int, int]) -> Image.Image:
+    """Fill Wan's delivery canvas while preserving the requested aspect ratio."""
+    target_width, target_height = size
+    scale = max(target_width / image.width, target_height / image.height)
+    resized = image.resize(
+        (max(1, round(image.width * scale)), max(1, round(image.height * scale))),
+        Image.Resampling.LANCZOS,
+    )
+    left = max(0, (resized.width - target_width) // 2)
+    top = max(0, (resized.height - target_height) // 2)
+    return resized.crop((left, top, left + target_width, top + target_height))
 
 
 class VideoBackend(Protocol):
@@ -14,13 +24,6 @@ class VideoBackend(Protocol):
 
     def render(self, frame_paths: list[Path], output_path: Path) -> Path | None:
         """Render final video from audited keyframes."""
-
-
-class ProxyVideoBackend:
-    name = "proxy"
-
-    def render(self, frame_paths: list[Path], output_path: Path) -> Path | None:
-        return export_motion_preview_if_available(frame_paths, output_path)
 
 
 class WanImageToVideoBackend:
@@ -38,7 +41,8 @@ class WanImageToVideoBackend:
         negative_prompt: str | None = None,
         num_inference_steps: int = 40,
         guidance_scale: float = 3.5,
-        fallback: VideoBackend | None = None,
+        offload_mode: str = "none",
+        endpoint_locked_shots: list[bool] | None = None,
     ):
         self.model_id = model_id
         self.device = device
@@ -54,7 +58,8 @@ class WanImageToVideoBackend:
         )
         self.num_inference_steps = num_inference_steps
         self.guidance_scale = guidance_scale
-        self.fallback = fallback
+        self.offload_mode = offload_mode
+        self.endpoint_locked_shots = endpoint_locked_shots or []
         self._pipe = None
         self._torch = None
         self._np = None
@@ -63,6 +68,7 @@ class WanImageToVideoBackend:
         self.frames_written = 0
         self.frame_dir: str | None = None
         self.output_size: tuple[int, int] | None = None
+        self.candidates_per_shot: int | list[int] = 1
 
     def metadata(self) -> dict:
         return {
@@ -75,12 +81,17 @@ class WanImageToVideoBackend:
             "generated_size": self.generated_size,
             "num_inference_steps": self.num_inference_steps,
             "guidance_scale": self.guidance_scale,
+            "offload_mode": self.offload_mode,
+            "endpoint_locked_shots": self.endpoint_locked_shots,
             "prompts": self.prompts,
             "negative_prompt": self.negative_prompt,
             "frames_written": self.frames_written,
             "frame_dir": self.frame_dir,
             "output_size": self.output_size,
-            "render_mode": "native_i2v",
+            "candidates_per_shot": self.candidates_per_shot,
+            "render_mode": "native_i2v_candidate_selection"
+            if (max(self.candidates_per_shot) if isinstance(self.candidates_per_shot, list) else self.candidates_per_shot) > 1
+            else "native_i2v",
             "used_fallback": self.used_fallback,
             "errors": self.errors[-3:],
         }
@@ -109,13 +120,22 @@ class WanImageToVideoBackend:
             raise RuntimeError("CUDA device was requested but torch.cuda.is_available() is false.")
 
         dtype = torch.bfloat16 if device == "cuda" else torch.float32
+        if self.offload_mode not in {"none", "model", "sequential"}:
+            raise ValueError(f"Unknown Wan offload mode: {self.offload_mode}")
         try:
             pipe = WanImageToVideoPipeline.from_pretrained(self.model_id, torch_dtype=dtype)
         except TypeError:
             pipe = WanImageToVideoPipeline.from_pretrained(self.model_id, dtype=dtype)
-        # Keep dtype decisions in from_pretrained(); this call only moves the
-        # pipeline to the selected device.
-        pipe = pipe.to(device=device)
+        # Model offload keeps the inactive text encoder, second denoiser, and
+        # VAE in CPU RAM. This avoids the full Wan A14B pipeline occupying one
+        # accelerator at once; sequential mode trades substantially more time
+        # for a lower VRAM peak.
+        if device == "cuda" and self.offload_mode == "model":
+            pipe.enable_model_cpu_offload(device=device)
+        elif device == "cuda" and self.offload_mode == "sequential":
+            pipe.enable_sequential_cpu_offload(device=device)
+        else:
+            pipe = pipe.to(device=device)
         self._pipe = pipe
         self._torch = torch
         self._np = np
@@ -126,11 +146,13 @@ class WanImageToVideoBackend:
         if self._pipe is None or self._np is None:
             return width, height
         try:
-            max_area = width * height
-            aspect_ratio = image.height / image.width
             mod_value = self._pipe.vae_scale_factor_spatial * self._pipe.transformer.config.patch_size[1]
-            height = round(self._np.sqrt(max_area * aspect_ratio)) // mod_value * mod_value
-            width = round(self._np.sqrt(max_area / aspect_ratio)) // mod_value * mod_value
+            # The demo config specifies the delivery resolution. Preserve that
+            # target (rather than the source-keyframe aspect ratio) and only
+            # round down when the Wan latent grid requires it. `cover_resize`
+            # below prepares every keyframe for this exact canvas.
+            width = width // mod_value * mod_value
+            height = height // mod_value * mod_value
             return max(int(width), mod_value), max(int(height), mod_value)
         except Exception:
             return width, height
@@ -141,6 +163,9 @@ class WanImageToVideoBackend:
         if self.prompts:
             return self.prompts[0]
         return "cinematic product commercial, premium lighting, smooth camera movement"
+
+    def _endpoint_lock_for(self, index: int) -> bool:
+        return index < len(self.endpoint_locked_shots) and self.endpoint_locked_shots[index]
 
     def _to_rgb_image(self, frame) -> Image.Image:
         if isinstance(frame, Image.Image):
@@ -167,22 +192,45 @@ class WanImageToVideoBackend:
             return Image.fromarray(array, mode="RGBA").convert("RGB")
         return Image.fromarray(array).convert("RGB")
 
-    def render(self, frame_paths: list[Path], output_path: Path) -> Path | None:
-        try:
-            self._load()
-            frame_dir = output_path.parent / "wan_i2v_frames"
-            frame_dir.mkdir(parents=True, exist_ok=True)
-            self.frame_dir = str(frame_dir)
+    def render_candidates(
+        self,
+        frame_paths: list[Path],
+        output_dir: Path,
+        candidates_per_shot: int | list[int] = 1,
+    ) -> list[list[list[Path]]]:
+        """Generate traceable Wan sequences before choosing a final video candidate.
 
-            generated_frames: list[Image.Image] = []
-            for index, frame_path in enumerate(frame_paths):
-                source = Image.open(frame_path).convert("RGB")
-                width, height = self._model_aligned_size(source)
-                image = cover_resize(source, (width, height))
-                generator = self._torch.Generator(device=self.device).manual_seed(self.seed + index)
+        Frames are written eagerly so Qwen can inspect evidence without retaining
+        multiple videos worth of RGB arrays in host memory.
+        """
+        candidate_counts = (
+            list(candidates_per_shot)
+            if isinstance(candidates_per_shot, list)
+            else [candidates_per_shot] * len(frame_paths)
+        )
+        if len(candidate_counts) != len(frame_paths) or any(count < 1 for count in candidate_counts):
+            raise ValueError("candidates_per_shot must be at least 1")
+        self._load()
+        self.candidates_per_shot = candidate_counts
+        output_dir.mkdir(parents=True, exist_ok=True)
+        self.frame_dir = str(output_dir)
+        sequences_by_shot: list[list[list[Path]]] = []
+
+        for shot_index, frame_path in enumerate(frame_paths):
+            source = Image.open(frame_path).convert("RGB")
+            width, height = self._model_aligned_size(source)
+            image = cover_resize(source, (width, height))
+            shot_sequences: list[list[Path]] = []
+            for candidate_index in range(candidate_counts[shot_index]):
+                seed = self.seed + shot_index * 1009 + candidate_index
+                generator = self._torch.Generator(device=self.device).manual_seed(seed)
                 frames = self._pipe(
                     image=image,
-                    prompt=self._prompt_for(index),
+                    # Wan natively interpolates between the supplied first and
+                    # last image. For a final packshot this prevents long-run
+                    # product drift without compositing any pixels afterward.
+                    last_image=image if self._endpoint_lock_for(shot_index) else None,
+                    prompt=self._prompt_for(shot_index),
                     negative_prompt=self.negative_prompt,
                     height=height,
                     width=width,
@@ -191,28 +239,53 @@ class WanImageToVideoBackend:
                     num_inference_steps=self.num_inference_steps,
                     generator=generator,
                 ).frames[0]
+                candidate_dir = output_dir / f"shot_{shot_index + 1:02d}" / f"candidate_{candidate_index + 1:02d}"
+                candidate_dir.mkdir(parents=True, exist_ok=True)
+                paths: list[Path] = []
                 for frame_index, frame in enumerate(frames):
                     rgb = self._to_rgb_image(frame)
-                    rgb.save(frame_dir / f"shot_{index + 1:02d}_frame_{frame_index:03d}.png")
-                    generated_frames.append(rgb)
+                    path = candidate_dir / f"frame_{frame_index:03d}.png"
+                    rgb.save(path)
+                    paths.append(path)
+                del frames
+                if self.device == "cuda":
+                    self._torch.cuda.empty_cache()
+                if not paths:
+                    raise RuntimeError(f"Wan I2V produced zero frames for shot {shot_index + 1}, candidate {candidate_index + 1}.")
+                shot_sequences.append(paths)
+            sequences_by_shot.append(shot_sequences)
+        return sequences_by_shot
 
-            if not generated_frames:
-                raise RuntimeError("Wan I2V produced zero frames.")
-            self.frames_written = len(generated_frames)
-            self.output_size = generated_frames[0].size
-            self._write_mp4(generated_frames, output_path)
-            if not self._is_readable_video(output_path):
-                raise RuntimeError(
-                    f"Video file was not written correctly: {output_path} "
-                    f"({output_path.stat().st_size if output_path.exists() else 0} bytes)."
-                )
-            return output_path
-        except Exception as exc:
-            self.used_fallback = True
-            self.errors.append(f"{type(exc).__name__}: {exc}")
-            if self.fallback is None:
-                raise
-            return self.fallback.render(frame_paths, output_path)
+    def render_selected(self, selected_sequences: list[list[Path]], output_path: Path) -> Path:
+        """Encode the Qwen-selected sequences into the final mp4 without a GPU."""
+        generated_frames: list[Image.Image] = []
+        for sequence in selected_sequences:
+            for path in sequence:
+                generated_frames.append(Image.open(path).convert("RGB"))
+        if not generated_frames:
+            raise RuntimeError("No selected Wan frames were available for video encoding.")
+        self.frames_written = len(generated_frames)
+        self.output_size = generated_frames[0].size
+        self._write_mp4(generated_frames, output_path)
+        if not self._is_readable_video(output_path):
+            raise RuntimeError(
+                f"Video file was not written correctly: {output_path} "
+                f"({output_path.stat().st_size if output_path.exists() else 0} bytes)."
+            )
+        return output_path
+
+    def render(self, frame_paths: list[Path], output_path: Path) -> Path | None:
+        candidates = self.render_candidates(frame_paths, output_path.parent / "wan_i2v_frames", 1)
+        return self.render_selected([shot_candidates[0] for shot_candidates in candidates], output_path)
+
+    def release(self) -> None:
+        if self._pipe is not None:
+            if hasattr(self._pipe, "remove_all_hooks"):
+                self._pipe.remove_all_hooks()
+            del self._pipe
+            self._pipe = None
+        if self.device == "cuda" and self._torch is not None:
+            self._torch.cuda.empty_cache()
 
     def _write_mp4(self, frames: list[Image.Image], output_path: Path) -> None:
         import cv2
@@ -264,12 +337,10 @@ def make_video_backend(
     negative_prompt: str | None = None,
     num_inference_steps: int = 40,
     guidance_scale: float = 3.5,
-    fallback_on_error: bool = True,
+    offload_mode: str = "none",
+    endpoint_locked_shots: list[bool] | None = None,
 ) -> VideoBackend:
-    if name == "proxy":
-        return ProxyVideoBackend()
     if name == "wan_i2v":
-        fallback = ProxyVideoBackend() if fallback_on_error else None
         return WanImageToVideoBackend(
             model_id=model_id,
             device=device,
@@ -281,6 +352,7 @@ def make_video_backend(
             negative_prompt=negative_prompt,
             num_inference_steps=num_inference_steps,
             guidance_scale=guidance_scale,
-            fallback=fallback,
+            offload_mode=offload_mode,
+            endpoint_locked_shots=endpoint_locked_shots,
         )
     raise ValueError(f"Unknown video backend: {name}")

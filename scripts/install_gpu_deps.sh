@@ -10,7 +10,8 @@ python -m pip install --upgrade pip
 TORCH_INDEX_URL="${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu121}"
 
 python -m pip install torch torchvision --index-url "$TORCH_INDEX_URL"
-python -m pip install transformers accelerate safetensors opencv-python imageio ftfy sentencepiece "rembg[cpu]"
+python -m pip install --upgrade transformers accelerate qwen-vl-utils
+python -m pip install safetensors opencv-python imageio ftfy sentencepiece "rembg[cpu]"
 
 # Wan2.2 support may require a recent Diffusers build. Installing from GitHub is
 # slower, but it avoids the common "WanImageToVideoPipeline not found" failure.

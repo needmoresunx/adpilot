@@ -19,11 +19,12 @@ def write_html_report(
     identity_card: IdentityCard,
     final_frames: list[Path],
     reports: list[CritiqueReport],
-    repair_log: list[dict],
     storyboard_path: Path,
     preview_path: Path | None,
     generation_metadata: dict | None = None,
     video_metadata: dict | None = None,
+    video_reports: list[CritiqueReport] | None = None,
+    planner_metadata: dict | None = None,
 ) -> Path:
     rows = []
     for frame, report in zip(final_frames, reports):
@@ -42,29 +43,50 @@ def write_html_report(
                 <p>logo_bbox_in_frame: {report.logo_bbox_in_frame}</p>
                 <p>ocr_available: {report.ocr_available}</p>
                 <p>ocr_text: {html.escape(report.ocr_text or 'none')}</p>
+                <p>critic: {html.escape(report.critic_name)}</p>
+                <p>identity_score: {report.identity_score}</p>
+                <p>identity_verdict: {html.escape(report.identity_verdict or 'not evaluated')}</p>
+                <p>product_visible: {report.product_visible}</p>
+                <p>product_count: {report.product_count}</p>
+                <p>label_readability: {html.escape(report.label_readability or 'not evaluated')}</p>
+                <p>visual_drift: {html.escape(', '.join(report.visual_drift) or 'none')}</p>
+                <p>recommended_action: {html.escape(report.repair_instruction or 'none')}</p>
+                <p>evidence: {html.escape(report.evidence or 'none')}</p>
                 <p>failure_reasons: {html.escape(reasons)}</p>
               </div>
             </article>
             """
         )
 
-    log_items = "\n".join(f"<li><code>{html.escape(str(item))}</code></li>" for item in repair_log) or "<li>No repair needed.</li>"
+    video_rows = []
+    for report in video_reports or []:
+        reasons = ", ".join(report.failure_reasons) if report.failure_reasons else "none"
+        video_rows.append(
+            f"<li><strong>{html.escape(report.shot_id)}</strong>: {'PASS' if report.passed else 'FAIL'}; "
+            f"identity_score={report.identity_score}; temporal_consistency="
+            f"{html.escape(report.temporal_consistency or 'not evaluated')}; "
+            f"failure_reasons={html.escape(reasons)}</li>"
+        )
     preview_html = ""
     if preview_path:
         preview_html = f'<video controls src="{html.escape(_rel(preview_path, run_dir) or "")}"></video>'
     generation_json = html.escape(json.dumps(generation_metadata or {}, indent=2))
     video_json = html.escape(json.dumps(video_metadata or {}, indent=2))
+    planner_json = html.escape(json.dumps(planner_metadata or {}, indent=2))
     generation_fallback = bool((generation_metadata or {}).get("used_fallback"))
     video_fallback = bool((video_metadata or {}).get("used_fallback"))
+    keyframe_audit_failed = any(not report.passed for report in reports)
+    video_audit_failed = any(not report.passed for report in (video_reports or []))
     video_name = (video_metadata or {}).get("name")
     video_label = {
         "wan_i2v": "Wan I2V Generated Video",
-        "proxy": "Proxy Preview",
     }.get(video_name, "Video Preview")
     product_brief_json = html.escape(json.dumps(identity_card.product_brief, indent=2))
     status_text = "PASS"
     if generation_fallback or video_fallback:
         status_text = "FALLBACK USED"
+    elif keyframe_audit_failed or video_audit_failed:
+        status_text = "IDENTITY CHECK FAILED"
 
     page = f"""<!doctype html>
 <html>
@@ -88,7 +110,7 @@ def write_html_report(
   <h1>AdPilot Identity Audit Report</h1>
   <section class="panel">
     <h2>Run Status</h2>
-    <p><span class="status {'warn' if generation_fallback or video_fallback else ''}">{status_text}</span></p>
+    <p><span class="status {'warn' if generation_fallback or video_fallback or keyframe_audit_failed or video_audit_failed else ''}">{status_text}</span></p>
     <p>generation_backend: {html.escape(str((generation_metadata or {}).get('name', 'unknown')))}</p>
     <p>generation_used_fallback: {generation_fallback}</p>
     <p>video_backend: {html.escape(str((video_metadata or {}).get('name', 'unknown')))}</p>
@@ -114,14 +136,16 @@ def write_html_report(
     <pre><code>{generation_json}</code></pre>
     <h3>Video</h3>
     <pre><code>{video_json}</code></pre>
+    <h3>Planner</h3>
+    <pre><code>{planner_json}</code></pre>
   </section>
   <section class="panel">
     <h2>Shot Critique</h2>
     {''.join(rows)}
   </section>
   <section class="panel">
-    <h2>Repair Log</h2>
-    <ul>{log_items}</ul>
+    <h2>Video Frame Critique</h2>
+    <ul>{''.join(video_rows) or '<li>Not evaluated.</li>'}</ul>
   </section>
 </body>
 </html>

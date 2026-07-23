@@ -46,6 +46,7 @@ def make_default_plan(identity_card: IdentityCard, style: str, duration: int, pl
                 ),
                 product_position="center",
                 product_scale=hero_scale,
+                motion_prompt="slow dolly-in and elegant product reveal",
             ),
             ShotPlan(
                 shot_id="shot_02",
@@ -57,6 +58,7 @@ def make_default_plan(identity_card: IdentityCard, style: str, duration: int, pl
                 ),
                 product_position="right",
                 product_scale=context_scale,
+                motion_prompt="gentle lateral camera move with subtle parallax",
             ),
             ShotPlan(
                 shot_id="shot_03",
@@ -68,6 +70,7 @@ def make_default_plan(identity_card: IdentityCard, style: str, duration: int, pl
                 ),
                 product_position="center",
                 product_scale=packshot_scale,
+                motion_prompt="smooth final push-in with restrained reflections",
             ),
         ],
     )

@@ -16,6 +16,7 @@ class IdentityCard:
     product_brief: dict
     logo_bbox: tuple[int, int, int, int] | None = None
     cutout_method: str = "none"
+    recognition_error: str | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)

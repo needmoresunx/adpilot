@@ -11,6 +11,7 @@ class ShotPlan:
     background_prompt: str
     product_position: str
     product_scale: float
+    motion_prompt: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)

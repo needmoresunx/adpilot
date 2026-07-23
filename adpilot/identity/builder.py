@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -8,7 +9,7 @@ from PIL import Image
 from adpilot.identity.brief import build_product_brief
 from adpilot.identity.card import IdentityCard
 from adpilot.identity.color import dominant_rgb
-from adpilot.identity.vlm import caption_product_image
+from adpilot.identity.vlm import analyze_product_image
 from adpilot.utils.json_io import write_json
 
 
@@ -23,6 +24,8 @@ def build_identity_card(
     product_description: str | None = None,
     target_audience: str | None = None,
     ad_mood: str | None = None,
+    identity_anchors: str | None = None,
+    package_state: str | None = None,
     auto_brief: bool = False,
     vlm_model: str | None = None,
     vlm_device: str = "auto",
@@ -30,8 +33,19 @@ def build_identity_card(
     product = Image.open(product_path).convert("RGBA")
     cutout_method = "original"
     if auto_cutout:
-        product = make_model_cutout(product, model_name=cutout_model)
-        cutout_method = f"rembg:{cutout_model}"
+        if cached_rembg_model_path(cutout_model) is not None:
+            try:
+                product = make_model_cutout(product, model_name=cutout_model)
+                cutout_method = f"rembg:{cutout_model}"
+            except RuntimeError:
+                product = make_simple_cutout(product)
+                cutout_method = "heuristic_bright_background"
+        else:
+            # GPU nodes often cannot reach the rembg release host. A bright,
+            # isolated packshot can still be cropped deterministically without
+            # downloading a segmentation weight during generation.
+            product = make_simple_cutout(product)
+            cutout_method = "heuristic_bright_background"
         product, crop_offset = trim_transparent_padding(product)
         if logo_bbox:
             ox, oy = crop_offset
@@ -52,12 +66,13 @@ def build_identity_card(
         if logo_bbox[2] <= logo_bbox[0] or logo_bbox[3] <= logo_bbox[1]:
             logo_bbox = None
     aspect_ratio = round(width / max(height, 1), 4)
-    visual_caption = None
+    vision_analysis = None
+    recognition_error = None
     if auto_brief and vlm_model:
         try:
-            visual_caption = caption_product_image(product_path, vlm_model, device=vlm_device)
-        except Exception:
-            visual_caption = None
+            vision_analysis = analyze_product_image(product_path, vlm_model, device=vlm_device)
+        except Exception as exc:
+            recognition_error = f"{type(exc).__name__}: {exc}"
     product_brief = build_product_brief(
         product_path=product_path,
         aspect_ratio=aspect_ratio,
@@ -65,7 +80,11 @@ def build_identity_card(
         description=product_description,
         audience=target_audience,
         mood=ad_mood,
-        visual_caption=visual_caption,
+        visual_caption=(vision_analysis or {}).get("description"),
+        vision_analysis=vision_analysis,
+        identity_anchors=identity_anchors,
+        package_state=package_state,
+        recognition_error=recognition_error,
     )
     card = IdentityCard(
         brand=brand,
@@ -78,6 +97,7 @@ def build_identity_card(
         product_brief=product_brief.to_dict(),
         logo_bbox=logo_bbox,
         cutout_method=cutout_method,
+        recognition_error=recognition_error,
     )
     write_json(output_dir / "identity_card.json", card.to_dict())
     return card
@@ -110,6 +130,18 @@ def make_simple_cutout(image: Image.Image, threshold: int = 42, feather: int = 3
     matte = np.clip((distance - threshold) / max(feather, 1), 0.0, 1.0)
     rgba[:, :, 3] = (alpha.astype(np.float32) * matte).astype(np.uint8)
     return Image.fromarray(rgba, "RGBA")
+
+
+def cached_rembg_model_path(model_name: str) -> Path | None:
+    filenames = {
+        "birefnet-general": "BiRefNet-general-epoch_244.onnx",
+    }
+    filename = filenames.get(model_name)
+    if not filename:
+        return None
+    cache_dir = Path(os.environ.get("U2NET_HOME", Path.home() / ".u2net"))
+    path = cache_dir / filename
+    return path if path.is_file() and path.stat().st_size > 0 else None
 
 
 def make_model_cutout(image: Image.Image, model_name: str) -> Image.Image:
