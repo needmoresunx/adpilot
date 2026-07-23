@@ -39,7 +39,7 @@ AdPilot turns a clean product reference image into a short, audited product-ad v
 3. Qwen2.5-VL selects candidates that preserve visible product identity.
 4. Wan2.2 I2V generates video candidates, followed by a temporal consistency audit.
 
-`front_lock` is used for the included one-image demos: the same reference image conditions every keyframe. The pipeline does not use a post-generation product overlay or background plate.
+`front_lock` is used for the included one-image demos.
 
 ## Setup
 
