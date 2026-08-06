@@ -60,7 +60,7 @@ bash scripts/download_models.sh
 
 ## Run an Agent Project
 
-The interactive agent keeps each project in `projects/YYYYMMDD_product-name/` with its input assets, revision history, state checkpoint, audit records, storyboard, and final video. This directory is ignored by Git.
+The interactive agent keeps each project in `projects/YYYYMMDD_product-name/` with its input assets, revision history, state checkpoint, audit records, storyboard, and final video.
 
 Each included demo has a product-specific configuration script. Edit the configuration at the top of one, then run it:
 
