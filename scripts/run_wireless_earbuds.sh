@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 # Edit these fields for this product-ad project.
 PRODUCT_IMAGE="examples/wireless-earbuds.jpg"
 BRAND="Wireless Earbuds"
-PROMPT="A minimal, precise, futuristic wireless-earbuds commercial for premium technology shoppers, with a clean high-tech set, polished acrylic reflections, and controlled studio light."
+PROMPT="A cohesive three-beat premium wireless-earbuds campaign in one cool-white and silver studio world. Keep the supplied open case and both earbuds seated together in every shot. Use three distinct beats: first, a frontal hero on reflective acrylic as the green status light wakes; second, a tighter symmetric composition with a moving light sweep across the rigid lid and soft reflection ripples; third, a calm final hero on a clear pedestal with a slow lateral camera move and shifting reflections. Never repeat an opening action, never show earbuds emerging, and never show an earbud or the case alone."
 PRODUCT_CATEGORY="electronics"
 PRODUCT_DESCRIPTION="White wireless earbuds with their matching open white charging case; the earbuds and case are one complete set and must never appear separately"
 IDENTITY_ANCHORS="open glossy white charging case, exactly two white earbuds, black speaker vents, small green status light, show the earbuds and charging case together as one complete matched set, never show either alone"
