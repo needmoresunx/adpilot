@@ -3,7 +3,7 @@ from pathlib import Path
 
 from adpilot.critic.critique import CritiqueReport
 from adpilot.critic.vlm import sample_frame_sequence
-from app import select_video_candidates
+from adpilot.creative import select_video_candidates
 
 
 def report(score: int, passed: bool, temporal: str) -> CritiqueReport:

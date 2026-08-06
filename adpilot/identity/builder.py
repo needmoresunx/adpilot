@@ -134,24 +134,36 @@ def make_simple_cutout(image: Image.Image, threshold: int = 42, feather: int = 3
 
 def cached_rembg_model_path(model_name: str) -> Path | None:
     filenames = {
-        "birefnet-general": "BiRefNet-general-epoch_244.onnx",
+        "birefnet-general": "birefnet-general.onnx",
     }
     filename = filenames.get(model_name)
     if not filename:
         return None
     cache_dir = Path(os.environ.get("U2NET_HOME", Path.home() / ".u2net"))
     path = cache_dir / filename
+    # Earlier AdPilot versions stored this exact weight under the release asset
+    # filename. rembg looks up the lowercase cache name, so retain the existing
+    # download through a lightweight compatibility link instead of redownloading.
+    legacy_path = cache_dir / "BiRefNet-general-epoch_244.onnx"
+    if not path.exists() and legacy_path.is_file() and legacy_path.stat().st_size > 0:
+        try:
+            path.symlink_to(legacy_path.name)
+        except OSError:
+            pass
     return path if path.is_file() and path.stat().st_size > 0 else None
 
 
 def make_model_cutout(image: Image.Image, model_name: str) -> Image.Image:
     """Remove a product-photo background with a real segmentation model."""
     try:
+        # rembg reads this while constructing ONNX Runtime SessionOptions. Set
+        # it here because identity-card creation opens the first rembg session.
+        os.environ["OMP_NUM_THREADS"] = os.environ.get("ADPILOT_ONNX_THREADS", "1")
         from rembg import new_session, remove
     except ImportError as exc:  # pragma: no cover - depends on optional GPU deps
         raise RuntimeError(
-            "--auto-cutout requires rembg. Run scripts/install_gpu_deps.sh, then "
-            "scripts/download_models.sh on the login node."
+            "--auto-cutout requires rembg. Run python -m pip install -r requirements.txt, then "
+            "scripts/download_models.sh."
         ) from exc
 
     try:
@@ -160,7 +172,7 @@ def make_model_cutout(image: Image.Image, model_name: str) -> Image.Image:
     except Exception as exc:
         raise RuntimeError(
             f"Could not load the product segmentation model '{model_name}'. "
-            "Run scripts/download_models.sh on a node with internet access."
+            "Run scripts/download_models.sh where model downloads are available."
         ) from exc
 
 

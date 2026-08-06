@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import json
 import re
 from pathlib import Path
@@ -19,6 +20,11 @@ Return only a JSON object with these fields:
   "readable_text": "visible brand or label text, or empty string when uncertain"
 }
 Do not infer claims that are not visible. Do not add markdown or commentary."""
+
+
+FEEDBACK_TRANSLATION_PROMPT = """Translate the user's creative feedback into a concise ASCII-English instruction for a
+diffusion model. Preserve every concrete constraint, but omit greetings, explanations, quotes, and markdown.
+Return only one English instruction of 4 to 24 words. Do not introduce new creative requests."""
 
 
 def parse_json_response(text: str) -> dict[str, Any]:
@@ -79,7 +85,7 @@ class QwenVisionSession:
             from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
         except Exception as exc:  # pragma: no cover - optional GPU dependency
             raise RuntimeError(
-                "Qwen2.5-VL requires current transformers. Run scripts/install_gpu_deps.sh."
+                "Qwen2.5-VL requires current transformers. Run python -m pip install -r requirements.txt."
             ) from exc
         device = self.requested_device
         if device == "auto":
@@ -132,11 +138,26 @@ class QwenVisionSession:
             clean_up_tokenization_spaces=False,
         )[0]
 
+    def ask_text(self, prompt: str, max_new_tokens: int = 96) -> str:
+        """Run the existing Qwen model without an image for feedback normalization."""
+        self.load()
+        messages = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
+        text = self._processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        inputs = self._processor(text=[text], padding=True, return_tensors="pt").to(self.device)
+        generated_ids = self._model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
+        generated_ids = generated_ids[:, inputs.input_ids.shape[1] :]
+        return self._processor.batch_decode(
+            generated_ids,
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=False,
+        )[0]
+
     def close(self) -> None:
         if self._model is not None:
             del self._model
             self._model = None
         self._processor = None
+        gc.collect()
         if self.device == "cuda" and self._torch is not None:
             self._torch.cuda.empty_cache()
 
@@ -145,3 +166,22 @@ def analyze_product_image(product_path: Path, model_id: str, device: str = "auto
     """Use Qwen2.5-VL to turn a reference product image into structured facts."""
     with QwenVisionSession(model_id=model_id, device=device) as session:
         return parse_json_response(session.ask([product_path], PRODUCT_ANALYSIS_PROMPT))
+
+
+def diffusion_safe_feedback(message: str, model_id: str, device: str = "auto") -> str:
+    """Translate non-ASCII feedback before FLUX or Wan sees it.
+
+    The original user text stays in agent state; only the generation instruction
+    is normalized to avoid CLIP's byte-level decode failure.
+    """
+    clean = " ".join(message.split())
+    if not clean:
+        raise ValueError("Feedback needs a message.")
+    if clean.isascii():
+        return clean
+    with QwenVisionSession(model_id=model_id, device=device) as session:
+        translated = session.ask_text(f"{FEEDBACK_TRANSLATION_PROMPT}\n\nUser feedback:\n{clean}")
+    normalized = " ".join(translated.replace("\n", " ").split()).strip(" '\"")
+    if not normalized or not normalized.isascii():
+        raise RuntimeError("Qwen could not produce an ASCII-English generation instruction from the feedback.")
+    return normalized

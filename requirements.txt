@@ -1,4 +1,4 @@
-# Verified in the project's adpilot environment (Python 3.11.15, CUDA 12.1).
+# Runtime dependencies for the reference-conditioned generation pipeline.
 --extra-index-url https://download.pytorch.org/whl/cu121
 
 torch==2.5.1+cu121
@@ -18,3 +18,5 @@ qwen-vl-utils==0.0.14
 rembg==2.0.76
 onnxruntime==1.27.0
 huggingface-hub==1.22.0
+langgraph>=1.0,<2.0
+langgraph-checkpoint-sqlite>=2.0,<4.0

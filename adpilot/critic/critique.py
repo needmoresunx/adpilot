@@ -8,7 +8,7 @@ class CritiqueReport:
     passed: bool
     product_scale: float
     color_delta: float
-    shape_score: float
+    shape_score: float | None
     logo_area_ratio: float | None
     product_bbox: tuple[int, int, int, int] | None
     logo_bbox_in_frame: tuple[int, int, int, int] | None
@@ -18,6 +18,9 @@ class CritiqueReport:
     critic_name: str = "geometry"
     identity_score: int | None = None
     identity_verdict: str | None = None
+    identity_checks: dict[str, str] = field(default_factory=dict)
+    identity_audit_score: int | None = None
+    identity_evidence: dict = field(default_factory=dict)
     product_visible: bool | None = None
     product_count: int | None = None
     label_readability: str | None = None

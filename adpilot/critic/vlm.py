@@ -14,7 +14,9 @@ Judge only the physical product identity. Do not penalize a changed background, 
 camera angle, position, or product scale. Return only JSON:
 {
   "identity_verdict": "pass|fail",
-  "identity_score": 0,
+  "silhouette_match": "match|minor_drift|mismatch",
+  "component_match": "match|minor_drift|mismatch",
+  "color_match": "match|minor_drift|mismatch",
   "product_visible": true,
   "product_count": 1,
   "label_readability": "readable|uncertain|unreadable|not_applicable",
@@ -23,11 +25,15 @@ camera angle, position, or product scale. Return only JSON:
   "repair_instruction": "one concise targeted regeneration instruction",
   "evidence": "one concise visual justification"
 }
-Use an integer identity_score from 0 through 100, never a 1-10 score. Set identity_verdict to pass
-unless the product is absent, duplicated, or materially different in silhouette/color/components.
+Set identity_verdict to pass only when silhouette_match, component_match, and color_match are not mismatch.
+Use "match" only when you can verify the same visible feature in both images. Use "minor_drift" for
+any uncertain or approximate match; do not assume a generated product matches because its category is similar.
+Compare component inventory, not just the overall category: any extra detached part, duplicate component,
+missing component, or altered assembly relationship is component_mismatch and must fail. For example, an
+extra loose earbud beside a charging case is a mismatch even though earbuds normally belong to that product.
 Readability is required only when the run explicitly asks for branding. Return compact JSON only: each array has at most one item of
 at most six words; failure_reasons contains only the listed code values; repair_instruction and evidence
-are each at most eight words."""
+are each at most eight words. Never copy field descriptions or generic phrases such as "specific visible differences" into the answer."""
 
 
 VIDEO_CRITIQUE_PROMPT = """You are a strict visual quality reviewer for an AI product-ad pipeline.
@@ -37,7 +43,9 @@ Judge only the physical product identity and temporal stability. Do not penalize
 lighting, camera angle, position, or scale. Return only JSON:
 {
   "identity_verdict": "pass|fail",
-  "identity_score": 0,
+  "silhouette_match": "match|minor_drift|mismatch",
+  "component_match": "match|minor_drift|mismatch",
+  "color_match": "match|minor_drift|mismatch",
   "product_visible": true,
   "product_count": 1,
   "label_readability": "readable|uncertain|unreadable|not_applicable",
@@ -48,8 +56,8 @@ lighting, camera angle, position, or scale. Return only JSON:
   "repair_instruction": "one concise targeted regeneration instruction",
   "evidence": "one concise visual justification"
 }
-Use an integer identity_score from 0 through 100, never a 1-10 score. Set identity_verdict to pass
-unless the product disappears, duplicates, or changes shape/color/components across frames. Readability
+Set identity_verdict to pass only when silhouette_match, component_match, and color_match are not mismatch,
+and the product does not disappear, duplicate, or change shape/color/components across frames. Readability
 is required only when the run explicitly asks for branding. A temporal artifact includes morphing, melting, warping, texture smear, or
 flicker inside the product, even when its outer silhouette remains stable. Return compact JSON only: each array has at most one item of at most six
 words; failure_reasons contains only the listed code values; repair_instruction and evidence are each
@@ -67,6 +75,17 @@ ALLOWED_CRITIC_FAILURES = {
     "temporal_artifact",
     "final_constraint_violation",
 }
+
+PAIRWISE_KEYFRAME_RANKING_PROMPT = """Image 1 is the ground-truth product reference. Images 2 and 3 are two generated
+advertising candidates for the same shot. Choose the candidate that better preserves the reference product's
+silhouette, visible components, and colors. Ignore background, lighting, camera angle, scale, and composition.
+Treat an extra detached part, duplicate component, missing component, or altered assembly relationship as worse identity preservation.
+Do not prefer Image 2 by default. Return only JSON:
+{
+  "preferred_candidate": "A|B|tie",
+  "reason": "one concise identity comparison"
+}
+Return tie when the visible product identity is equally preserved or cannot be distinguished."""
 
 
 def reference_identity_constraint(
@@ -109,13 +128,6 @@ def reference_identity_constraint(
     )
 
 
-def _as_score(value: object) -> int:
-    try:
-        return max(0, min(100, int(float(value))))
-    except (TypeError, ValueError):
-        return 0
-
-
 def _as_count(value: object) -> int | None:
     try:
         return int(value)
@@ -153,6 +165,66 @@ def _ask_critic_json(session: QwenVisionSession, image_paths: list[Path], prompt
             ) from retry_error
 
 
+def _pairwise_keyframe_ranking(
+    session: QwenVisionSession,
+    identity_card: IdentityCard,
+    shot: ShotPlan,
+    reference_path: Path,
+    candidates: list[Path],
+    reports: list[CritiqueReport],
+) -> dict:
+    """Rank candidates comparatively; VLM-provided absolute scores are not calibrated."""
+    viable = [index for index, report in enumerate(reports) if report.passed]
+    pool = viable or list(range(len(candidates)))
+    if len(pool) == 1:
+        return {
+            "selected_candidate": pool[0] + 1,
+            "selection_method": "audit_filter",
+            "comparisons": [],
+        }
+
+    winner = pool[0]
+    decisive = False
+    comparisons: list[dict] = []
+    for round_index, challenger in enumerate(pool[1:], start=1):
+        # Vary the displayed order by shot and tournament round so a deterministic
+        # model cannot systematically favour candidate A.
+        display_winner_first = (sum(ord(char) for char in shot.shot_id) + round_index) % 2 == 0
+        left, right = (winner, challenger) if display_winner_first else (challenger, winner)
+        prompt = (
+            f"{PAIRWISE_KEYFRAME_RANKING_PROMPT}\n\n"
+            f"{reference_identity_constraint(identity_card, shot)}"
+        )
+        raw_response, result = _ask_critic_json(
+            session,
+            [reference_path, candidates[left], candidates[right]],
+            prompt,
+        )
+        preference = str(result.get("preferred_candidate") or "tie").strip().lower()
+        preferred_index = None
+        if preference in {"a", "candidate_a", "left"}:
+            preferred_index = left
+        elif preference in {"b", "candidate_b", "right"}:
+            preferred_index = right
+        if preferred_index is not None:
+            winner = preferred_index
+            decisive = True
+        comparisons.append(
+            {
+                "left_candidate": left + 1,
+                "right_candidate": right + 1,
+                "preferred_candidate": preferred_index + 1 if preferred_index is not None else None,
+                "reason": str(result.get("reason") or "").strip(),
+                "raw_response": raw_response,
+            }
+        )
+    return {
+        "selected_candidate": winner + 1 if decisive else None,
+        "selection_method": "pairwise_identity" if decisive else "pairwise_indeterminate",
+        "comparisons": comparisons,
+    }
+
+
 def critique_generated_keyframes(
     identity_card: IdentityCard,
     shots: list[ShotPlan],
@@ -178,14 +250,18 @@ def critique_keyframe_candidates(
     device: str = "auto",
     minimum_identity_score: int = 75,
     reference_paths: list[Path] | None = None,
+    reference_assignments: list[Path] | None = None,
     final_shot_constraint: str = "",
     require_readable_branding: bool = False,
-) -> list[list[CritiqueReport]]:
+    include_rankings: bool = False,
+) -> list[list[CritiqueReport]] | tuple[list[list[CritiqueReport]], list[dict]]:
     if len(shots) != len(candidate_paths):
         raise ValueError("Each shot plan must have one candidate group.")
+    if reference_assignments is not None and len(reference_assignments) != len(shots):
+        raise ValueError("reference_assignments must have one entry per shot plan.")
     with QwenVisionSession(model_id=model_id, device=device) as session:
         references = [Path(identity_card.product_path), *(Path(path) for path in (reference_paths or []))]
-        return [
+        reports = [
             [
                 _critique_one_keyframe(
                     session,
@@ -193,7 +269,11 @@ def critique_keyframe_candidates(
                     shot,
                     candidate,
                     minimum_identity_score,
-                    reference_path=references[index % len(references)],
+                    reference_path=(
+                        Path(reference_assignments[index])
+                        if reference_assignments is not None
+                        else references[index % len(references)]
+                    ),
                     final_shot_constraint=final_shot_constraint,
                     require_readable_branding=require_readable_branding,
                 )
@@ -201,6 +281,24 @@ def critique_keyframe_candidates(
             ]
             for index, (shot, candidates) in enumerate(zip(shots, candidate_paths))
         ]
+        if not include_rankings:
+            return reports
+        rankings = [
+            _pairwise_keyframe_ranking(
+                session,
+                identity_card,
+                shot,
+                (
+                    Path(reference_assignments[index])
+                    if reference_assignments is not None
+                    else references[index % len(references)]
+                ),
+                candidates,
+                shot_reports,
+            )
+            for index, (shot, candidates, shot_reports) in enumerate(zip(shots, candidate_paths, reports))
+        ]
+        return reports, rankings
 
 
 def sample_wan_frames(frame_dir: Path, shot_count: int) -> list[list[Path]]:
@@ -254,12 +352,15 @@ def critique_video_candidates(
     device: str = "auto",
     minimum_identity_score: int = 75,
     reference_paths: list[Path] | None = None,
+    reference_assignments: list[Path] | None = None,
     final_shot_constraint: str = "",
     require_readable_branding: bool = False,
 ) -> list[list[CritiqueReport]]:
     """Audit every Wan candidate and retain sampled evidence frames in its report."""
     if len(shots) != len(candidate_sequences):
         raise ValueError("Each shot plan must have one generated video candidate group.")
+    if reference_assignments is not None and len(reference_assignments) != len(shots):
+        raise ValueError("reference_assignments must have one entry per shot plan.")
     with QwenVisionSession(model_id=model_id, device=device) as session:
         references = [Path(identity_card.product_path), *(Path(path) for path in (reference_paths or []))]
         return [
@@ -270,7 +371,11 @@ def critique_video_candidates(
                     shot,
                     sample_frame_sequence(sequence, sample_count=5 if final_shot_constraint and shot.shot_id == "shot_03" else 3),
                     minimum_identity_score,
-                    reference_path=references[index % len(references)],
+                    reference_path=(
+                        Path(reference_assignments[index])
+                        if reference_assignments is not None
+                        else references[index % len(references)]
+                    ),
                     final_shot_constraint=final_shot_constraint,
                     require_readable_branding=require_readable_branding,
                 )
@@ -347,21 +452,29 @@ def _report_from_result(
     raw_response: str | None = None,
     require_readable_branding: bool = False,
 ) -> CritiqueReport:
-    score = _as_score(result.get("identity_score"))
     product_visible = bool(result.get("product_visible"))
     product_count = _as_count(result.get("product_count"))
     readability = str(result.get("label_readability") or "uncertain").lower()
     verdict = str(result.get("identity_verdict") or "").strip().lower()
     if verdict not in {"pass", "fail"}:
         verdict = None
+    identity_checks = {
+        name: str(result.get(name) or "unknown").strip().lower()
+        for name in ("silhouette_match", "component_match", "color_match")
+    }
     reasons = _critic_failure_codes(result.get("failure_reasons"))
+    check_failures = {
+        "silhouette_match": "silhouette_mismatch",
+        "component_match": "component_mismatch",
+        "color_match": "color_mismatch",
+    }
+    for check_name, failure_code in check_failures.items():
+        if identity_checks[check_name] == "mismatch":
+            reasons.append(failure_code)
+    if any(value == "unknown" for value in identity_checks.values()):
+        reasons.append("incomplete_identity_evidence")
     if verdict == "fail":
         reasons.append("critic_identity_verdict_fail")
-    # A numeric score from a small local VLM can be malformed (the observed
-    # 1/0 values contradicted its own positive visual evidence). A controlled
-    # pass/fail verdict therefore takes precedence when it is present.
-    if score < minimum_identity_score and verdict != "pass":
-        reasons.append("low_identity_score")
     if not product_visible:
         reasons.append("product_not_visible")
     if product_count is not None and product_count != 1:
@@ -369,12 +482,13 @@ def _report_from_result(
     if require_readable_branding and readability == "unreadable":
         reasons.append("label_unreadable")
     reasons = list(dict.fromkeys(reasons))
+    passed = not reasons
     return CritiqueReport(
         shot_id=shot.shot_id,
-        passed=not reasons,
+        passed=passed,
         product_scale=shot.product_scale,
         color_delta=0.0,
-        shape_score=round(score / 100.0, 4),
+        shape_score=None,
         logo_area_ratio=None,
         product_bbox=None,
         logo_bbox_in_frame=None,
@@ -382,8 +496,11 @@ def _report_from_result(
         ocr_available=False,
         failure_reasons=reasons,
         critic_name="qwen2_5_vl",
-        identity_score=score,
+        identity_score=None,
         identity_verdict=verdict,
+        identity_checks=identity_checks,
+        # The score is attached later from pixel-level visual comparison, not Qwen's labels.
+        identity_audit_score=None,
         product_visible=product_visible,
         product_count=product_count,
         label_readability=readability,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import json
+import os
 from pathlib import Path
 
 from adpilot.critic.critique import CritiqueReport
@@ -11,7 +12,7 @@ from adpilot.identity.card import IdentityCard
 def _rel(path: Path | None, base: Path) -> str | None:
     if path is None:
         return None
-    return path.resolve().relative_to(base.resolve()).as_posix()
+    return Path(os.path.relpath(path.resolve(), start=base.resolve())).as_posix()
 
 
 def write_html_report(
@@ -25,10 +26,19 @@ def write_html_report(
     video_metadata: dict | None = None,
     video_reports: list[CritiqueReport] | None = None,
     planner_metadata: dict | None = None,
+    repair_log: list[dict] | None = None,
 ) -> Path:
     rows = []
     for frame, report in zip(final_frames, reports):
         reasons = ", ".join(report.failure_reasons) if report.failure_reasons else "none"
+        evidence_path = report.identity_evidence.get("evidence_image")
+        visual_metric = report.identity_evidence.get("visual_metric", {})
+        evidence_html = ""
+        if evidence_path:
+            evidence_html = (
+                f'<img class="evidence" src="{html.escape(_rel(Path(evidence_path), run_dir) or "")}" '
+                'alt="identity evidence" />'
+            )
         rows.append(
             f"""
             <article class="shot">
@@ -37,15 +47,17 @@ def write_html_report(
                 <h3>{html.escape(report.shot_id)}: {'PASS' if report.passed else 'FAIL'}</h3>
                 <p>scale: {report.product_scale}</p>
                 <p>color_delta: {report.color_delta}</p>
-                <p>shape_score: {report.shape_score}</p>
                 <p>logo_area_ratio: {report.logo_area_ratio}</p>
                 <p>product_bbox: {report.product_bbox}</p>
                 <p>logo_bbox_in_frame: {report.logo_bbox_in_frame}</p>
                 <p>ocr_available: {report.ocr_available}</p>
                 <p>ocr_text: {html.escape(report.ocr_text or 'none')}</p>
                 <p>critic: {html.escape(report.critic_name)}</p>
-                <p>identity_score: {report.identity_score}</p>
                 <p>identity_verdict: {html.escape(report.identity_verdict or 'not evaluated')}</p>
+                <p>visual_identity_score: {report.identity_audit_score}</p>
+                <p>visual_metric: {html.escape(json.dumps(visual_metric, ensure_ascii=True))}</p>
+                <p>identity_checks: {html.escape(json.dumps(report.identity_checks, ensure_ascii=True))}</p>
+                {evidence_html}
                 <p>product_visible: {report.product_visible}</p>
                 <p>product_count: {report.product_count}</p>
                 <p>label_readability: {html.escape(report.label_readability or 'not evaluated')}</p>
@@ -63,9 +75,17 @@ def write_html_report(
         reasons = ", ".join(report.failure_reasons) if report.failure_reasons else "none"
         video_rows.append(
             f"<li><strong>{html.escape(report.shot_id)}</strong>: {'PASS' if report.passed else 'FAIL'}; "
-            f"identity_score={report.identity_score}; temporal_consistency="
+            f"identity_verdict={html.escape(report.identity_verdict or 'not evaluated')}; temporal_consistency="
             f"{html.escape(report.temporal_consistency or 'not evaluated')}; "
             f"failure_reasons={html.escape(reasons)}</li>"
+        )
+    repair_rows = []
+    for item in repair_log or []:
+        repair_rows.append(
+            f"<li><strong>{html.escape(str(item.get('stage', 'unknown')))} / "
+            f"{html.escape(str(item.get('shot_id', 'unknown')))}</strong>: "
+            f"{'repaired' if item.get('repaired') else 'still failed'}; "
+            f"reason={html.escape(', '.join(item.get('failure_reasons', [])) or 'none')}</li>"
         )
     preview_html = ""
     if preview_path:
@@ -101,6 +121,7 @@ def write_html_report(
     .status.warn {{ background: #fef3c7; }}
     .shot {{ display: grid; grid-template-columns: 180px 1fr; gap: 18px; align-items: start; margin: 18px 0; }}
     .shot img {{ width: 180px; border-radius: 6px; border: 1px solid #ddd; }}
+    .shot img.evidence {{ width: min(100%, 640px); margin-top: 8px; }}
     .storyboard {{ max-width: 900px; width: 100%; border: 1px solid #ddd; border-radius: 6px; }}
     video {{ width: 320px; max-width: 100%; border-radius: 6px; border: 1px solid #ddd; }}
     code {{ white-space: pre-wrap; }}
@@ -146,6 +167,10 @@ def write_html_report(
   <section class="panel">
     <h2>Video Frame Critique</h2>
     <ul>{''.join(video_rows) or '<li>Not evaluated.</li>'}</ul>
+  </section>
+  <section class="panel">
+    <h2>Bounded Repair Loop</h2>
+    <ul>{''.join(repair_rows) or '<li>No repair was needed.</li>'}</ul>
   </section>
 </body>
 </html>

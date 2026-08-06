@@ -11,7 +11,7 @@ venv/
 
 outputs/
 outputs_test/
-download.log
+projects/
 *.log
 
 models/
@@ -19,15 +19,5 @@ models/
 *.ckpt
 *.pt
 *.pth
-
-# Keep non-portfolio product examples and their runners local only.
-/examples/energy-drink.jpg
-/examples/jelly.jpg
-/examples/lipgloss.jpg
-/examples/perfume.jpg
-/scripts/run_energy_drink.sh
-/scripts/run_jelly.sh
-/scripts/run_lipgloss.sh
-/scripts/run_perfume.sh
 
 .DS_Store

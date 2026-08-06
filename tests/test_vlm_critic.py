@@ -1,7 +1,14 @@
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 
-from adpilot.critic.vlm import _ask_critic_json, _critique_one_video, _report_from_result, reference_identity_constraint
+from adpilot.critic.vlm import (
+    _ask_critic_json,
+    _critique_one_video,
+    _pairwise_keyframe_ranking,
+    _report_from_result,
+    reference_identity_constraint,
+)
 from adpilot.planner.schema import ShotPlan
 
 
@@ -14,6 +21,9 @@ class VlmCriticTests(unittest.TestCase):
             {
                 "identity_verdict": "pass",
                 "identity_score": 1,
+                "silhouette_match": "match",
+                "component_match": "match",
+                "color_match": "match",
                 "product_visible": True,
                 "product_count": 1,
                 "label_readability": "readable",
@@ -51,6 +61,9 @@ class VlmCriticTests(unittest.TestCase):
         result = {
             "identity_verdict": "pass",
             "identity_score": 85,
+            "silhouette_match": "match",
+            "component_match": "match",
+            "color_match": "match",
             "product_visible": True,
             "product_count": 1,
             "label_readability": "unreadable",
@@ -60,6 +73,54 @@ class VlmCriticTests(unittest.TestCase):
         self.assertFalse(
             _report_from_result(result, self.shot, 75, require_readable_branding=True).passed
         )
+
+    def test_untrusted_vlm_numeric_score_is_not_exposed_as_a_measurement(self):
+        report = _report_from_result(
+            {
+                "identity_verdict": "pass",
+                "identity_score": 85,
+                "silhouette_match": "match",
+                "component_match": "match",
+                "color_match": "match",
+                "product_visible": True,
+                "product_count": 1,
+            },
+            self.shot,
+            75,
+        )
+
+        self.assertIsNone(report.identity_score)
+        self.assertIsNone(report.shape_score)
+        self.assertIsNone(report.identity_audit_score)
+        self.assertEqual(report.identity_checks["silhouette_match"], "match")
+
+    def test_pairwise_ranking_can_prefer_the_second_candidate(self):
+        class SessionStub:
+            def ask(self, paths, _prompt, max_new_tokens):
+                self.max_new_tokens = max_new_tokens
+                preferred = "A" if paths[1].name == "candidate_b.jpg" else "B"
+                return f'{{"preferred_candidate":"{preferred}","reason":"components match reference"}}'
+
+        identity = SimpleNamespace(
+            aspect_ratio=1.0,
+            product_brief={"category": "electronics", "identity_anchors": "two white earbuds"},
+        )
+        reports = [
+            _report_from_result({"identity_verdict": "pass", "product_visible": True, "product_count": 1}, self.shot, 75),
+            _report_from_result({"identity_verdict": "pass", "product_visible": True, "product_count": 1}, self.shot, 75),
+        ]
+
+        ranking = _pairwise_keyframe_ranking(
+            SessionStub(),
+            identity,
+            self.shot,
+            Path("reference.jpg"),
+            [Path("candidate_a.jpg"), Path("candidate_b.jpg")],
+            reports,
+        )
+
+        self.assertEqual(ranking["selected_candidate"], 2)
+        self.assertEqual(ranking["selection_method"], "pairwise_identity")
 
     def test_reference_constraint_names_distinctive_product_shape_and_component(self):
         identity = SimpleNamespace(

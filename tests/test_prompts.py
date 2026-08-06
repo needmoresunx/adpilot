@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from app import final_shot_endpoint_locks, make_keyframe_prompts, make_video_prompts, video_candidate_counts
+from adpilot.creative import make_keyframe_prompts, make_video_prompts
 from adpilot.planner.schema import AdPlan, ShotPlan
 
 
@@ -50,14 +50,6 @@ class PromptTests(unittest.TestCase):
         self.assertIn("cinematic cosmetic commercial", prompts[0].lower())
         self.assertIn("exact geometry", prompts[0])
         self.assertIn("existing hinges", prompts[0])
-
-    def test_endpoint_lock_applies_only_to_the_final_shot(self):
-        self.assertEqual(final_shot_endpoint_locks(3, True), [False, False, True])
-        self.assertEqual(final_shot_endpoint_locks(3, False), [False, False, False])
-
-    def test_only_final_shot_can_request_extra_video_candidates(self):
-        self.assertEqual(video_candidate_counts(3, 1, 2), [1, 1, 2])
-
 
 if __name__ == "__main__":
     unittest.main()

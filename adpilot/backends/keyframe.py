@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 from pathlib import Path
 from typing import Protocol
 
@@ -182,7 +183,7 @@ class FluxKontextKeyframeBackend:
         except Exception as exc:  # pragma: no cover - optional model dependencies
             raise RuntimeError(
                 "FLUX Kontext requires a current Diffusers build. Run "
-                "scripts/install_gpu_deps.sh inside the adpilot environment."
+                "python -m pip install -r requirements.txt."
             ) from exc
 
         if self.device == "auto":
@@ -314,6 +315,7 @@ class FluxKontextKeyframeBackend:
                 self._pipe.remove_all_hooks()
             del self._pipe
             self._pipe = None
+        gc.collect()
         if self.device == "cuda" and self._torch is not None:
             self._torch.cuda.empty_cache()
 

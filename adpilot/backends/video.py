@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 from pathlib import Path
 from typing import Protocol
 
@@ -106,7 +107,7 @@ class WanImageToVideoBackend:
         except Exception as exc:  # pragma: no cover - optional deps
             raise RuntimeError(
                 "Wan I2V backend requires torch, numpy, and a recent diffusers "
-                "with WanImageToVideoPipeline. Run scripts/install_gpu_deps.sh "
+                "with WanImageToVideoPipeline. Run python -m pip install -r requirements.txt "
                 "inside the adpilot environment."
             ) from exc
 
@@ -284,6 +285,7 @@ class WanImageToVideoBackend:
                 self._pipe.remove_all_hooks()
             del self._pipe
             self._pipe = None
+        gc.collect()
         if self.device == "cuda" and self._torch is not None:
             self._torch.cuda.empty_cache()
 
